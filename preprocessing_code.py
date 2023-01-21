@@ -6,12 +6,11 @@ from brainbox.task import trials
 from sklearn.linear_model import LinearRegression
 import mlflow
 from sklearn.model_selection import cross_val_score
+from sklearn.metrics import r2_score
 import warnings
+from sklearn.model_selection import train_test_split
+#https://learn-scikit.oneoffcoder.com/mlflow.html
 
-one = ONE(base_url='https://openalyx.internationalbrainlab.org', password='international', silent=True)
-
-
-eid = '58b1e920-cfc8-467e-b28b-7654a55d0977'
 
 class EIDData():
     def __init__(self,eid):
@@ -53,26 +52,19 @@ class EIDData():
         self.fluctuations_dict={}
         for n in self.raster_dict.keys():
             sub=self.raster_dict[n]-self.psth_dict[n][0]
-            fluctuations=np.std(sub)
+            fluctuations=np.std(sub,axis=0)
             self.fluctuations_dict[n]=fluctuations
-            return self.fluctuations_dict
 
-    def ols_regression(self):
-        with mlflow.start_run():
-            for n1 in self.fluctuations_dict.keys():
-                for n2 in self.fluctuations_dict.keys():
-                    if n1!=n2:
-                        X=np.array(self.fluctuations_dict[n1])
-                        y=np.array(self.fluctuations_dict[n2])
-                        reg = LinearRegression(random_state=42)
-                        r2 = cross_val_score(reg, X, y, cv=10)
-                        mlflow.sklearn.log_model(reg,"ols_regression")
-                        mlflow.log_metric(r2)
 
 if __name__ == "__main__":
     warnings.filterwarnings("ignore")
 
     with mlflow.start_run():
+
+        one = ONE(base_url='https://openalyx.internationalbrainlab.org', password='international', silent=True)
+
+
+        eid = '58b1e920-cfc8-467e-b28b-7654a55d0977'
 
         dat=EIDData(eid)
         dat.make_rasters()
@@ -80,9 +72,16 @@ if __name__ == "__main__":
         dat.trial_to_trial_fluctuations()
         fluctuations_dict=dat.fluctuations_dict
         for n1 in fluctuations_dict.keys():
-                for n2 in fluctuations_dict.keys():
-                    if n1!=n2:
-                        reg = LinearRegression(kernel='linear', C=1, random_state=42)
-                        r2 = cross_val_score(reg, np.array(fluctuations_dict[n1]), np.array(fluctuations_dict[n2]), cv=10)
-                        mlflow.sklearn.log_model(reg,"ols_regression")
-                        mlflow.log_metric(r2)
+            for n2 in fluctuations_dict.keys():
+                if n1!=n2:
+
+                    X=np.array(fluctuations_dict[n1]).reshape(-1,1)
+                    y=np.array(fluctuations_dict[n2]).reshape(-1,1)
+                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=4284)
+                    reg = LinearRegression()
+                    reg.fit(X_train,y_train)
+                    y_pred=reg.predict(X_test)
+                    #r2 = cross_val_score(reg, X, y, cv=10,scoring='r2')
+                    r2=r2_score(y_pred,y_test)
+                    mlflow.sklearn.log_model(reg,"ols_regression")
+                    mlflow.log_metric('R2_score',r2)
