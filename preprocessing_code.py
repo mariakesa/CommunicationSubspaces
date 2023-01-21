@@ -9,17 +9,16 @@ from sklearn.model_selection import cross_val_score
 from sklearn.metrics import r2_score
 import warnings
 from sklearn.model_selection import train_test_split
-#https://learn-scikit.oneoffcoder.com/mlflow.html
-
 
 class EIDData():
-    def __init__(self,eid):
-        self.load_data(eid)
+    def __init__(self,eid,one):
+        self.load_data(eid,one)
 
-    def load_data(self,eid,choice=1,contrastLeft=1.0):
+    def load_data(self,eid,choice=-1,contrastLeft=1.0):
         self.annot = one.load_dataset(eid, 'alf/_ibl_trials.table.pqt')
-        df=pd.DataFrame(self.annot)
-        self.trials=df.loc[(df['choice'] == choice) & (df['contrastLeft'] == contrastLeft)].index
+        self.df=pd.DataFrame(self.annot)
+        print(self.df)
+        self.trials=self.df.loc[(self.df['choice'] ==-1)].index
         #Try to download probe01 spike trains, some experiments have 2 probes
         self.spike_times=one.load_dataset(eid, 'alf/probe00/pykilosort/spikes.times.npy')
         self.spike_amps=one.load_dataset(eid, 'alf/probe00/pykilosort/spikes.amps.npy')
@@ -30,32 +29,77 @@ class EIDData():
         # Use numpy.take() to select the corresponding brain area for each channel in the clusters.channels file
         self.cluster_brain_areas= np.take(self.brain_areas, self.channels)
         #Can change other events like reward delivery
-        self.events=self.annot["stimOn_times"]
+        self.events=self.annot["stimOn_times"].values
 
     def make_rasters(self):
         self.raster_dict={}
-        for n in list(np.unique(self.spike_clusters)):
-            neuron=np.where(self.spike_clusters==n)
-            if len(list(neuron[0]))!=0:
-                #Can modify parameters for getting rasters
-                raster=trials.get_event_aligned_raster(self.spike_times[neuron], self.events, tbin=0.1, values=None, epoch=[-0.4, 1], bin=True)
-                if np.isnan(raster[0]).any()==False:
-                    self.raster_dict[n]=raster[0]
+        print(self.df.shape)
+        print(self.events.shape)
+        print(self.trials.shape)
+        for cl in list(np.unique(self.spike_clusters)):
+            #neuron=np.where(self.spike_clusters==n)
+            #print(neuron)
+            #Can modify parameters for getting rasters
+            #print(self.spike_times[self.spike_clusters==cl])
+            raster=trials.get_event_aligned_raster(self.spike_times[self.spike_clusters==cl], self.events, tbin=0.1, values=None, epoch=[-0.4, 1], bin=True)[0]
+            raster[np.isnan(raster)] = 0.00000001
+            #print(raster.shape)
+            self.raster_dict[cl]=raster
+        #print(self.raster_dict)
+        #print(np.where(self.raster_dict[n]==np.nan))
+
 
     def make_psth(self):
         self.psth_dict={}
         for n in self.raster_dict.keys():
-            psth=trials.get_psth(self.raster_dict[n],trial_ids=self.trials)
+            psth=trials.get_psth(self.raster_dict[n])
             self.psth_dict[n]=psth
 
     def trial_to_trial_fluctuations(self):
         self.fluctuations_dict={}
-        for n in self.raster_dict.keys():
+        for n in self.psth_dict.keys():
             sub=self.raster_dict[n]-self.psth_dict[n][0]
-            fluctuations=np.std(sub,axis=0)
+            fluctuations=np.nanstd(sub,axis=0)
             self.fluctuations_dict[n]=fluctuations
 
+    def brain_area_dict(self):
+        #print(self.cluster_brain_areas)
+        #print(self.raster_dict)
+        b_lst=[]
+        self.brain_area_dict={}
+        for b in np.unique(self.cluster_brain_areas):
+            inds=np.where(self.cluster_brain_areas==b)[0]
+            i_lst=[]
+            for i in inds:
+                try:
+                    i_lst.append(self.fluctuations_dict[i])
+                except:
+                    pass
+            self.brain_area_dict[b]=np.array(i_lst)
 
+            print(self.brain_area_dict[b].shape)
+
+        '''
+        #These are single neuron predictions! Not brain areas
+        self.brain_area_dict={}
+        for i in range(len(self.cluster_brain_areas)):
+            self.brain_area_dict[self.channels[i]=self.cluster_brain_areas[i]
+        b_lst=[]
+        for n1 in len(list(np.unique(self.cluster_brain_areas))):
+            b_lst.append([])
+        for n2 in fluctuations_dict.keys():
+            self.brain_area_dict[n1]
+        '''
+
+eid = '58b1e920-cfc8-467e-b28b-7654a55d0977'
+one = ONE(base_url='https://openalyx.internationalbrainlab.org', password='international', silent=True)
+dat=EIDData(eid,one)
+dat.make_rasters()
+dat.make_psth()
+#print(dat.psth_dict)
+dat.trial_to_trial_fluctuations()
+dat.brain_area_dict()
+'''
 if __name__ == "__main__":
     warnings.filterwarnings("ignore")
 
@@ -74,14 +118,16 @@ if __name__ == "__main__":
         for n1 in fluctuations_dict.keys():
             for n2 in fluctuations_dict.keys():
                 if n1!=n2:
-
-                    X=np.array(fluctuations_dict[n1]).reshape(-1,1)
-                    y=np.array(fluctuations_dict[n2]).reshape(-1,1)
+                    #print(len(fluctuations_dict.keys()))
+                    X=np.array(fluctuations_dict[n1])
+                    y=np.array(fluctuations_dict[n2])
                     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=4284)
                     reg = LinearRegression()
                     reg.fit(X_train,y_train)
                     y_pred=reg.predict(X_test)
                     #r2 = cross_val_score(reg, X, y, cv=10,scoring='r2')
                     r2=r2_score(y_pred,y_test)
-                    mlflow.sklearn.log_model(reg,"ols_regression")
-                    mlflow.log_metric('R2_score',r2)
+                    print(r2)
+                    #mlflow.sklearn.log_model(reg,"ols_regression")
+                    #mlflow.log_metric('R2_score',r2)
+'''
